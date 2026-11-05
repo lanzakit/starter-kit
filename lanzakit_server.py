@@ -5,7 +5,10 @@ Agente de IA para generar y analizar tests de Python.
 """
 import ast
 import os
+import subprocess
+import tempfile
 from pathlib import Path
+import sys
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -240,6 +243,166 @@ def generate_tests_for_file(file_path: str) -> dict:
         }
     }
 
+@mcp.tool()
+def generate_and_validate_tests(
+    file_path: str,
+    save_to: str = ""
+) -> dict:
+    """
+    Flujo completo: genera tests, valida sintaxis, ejecuta y reporta.
+    
+    Esta tool cierra el loop de calidad: no solo genera tests sino que
+    verifica que compilen y que pasen antes de entregárselos al usuario.
+    
+    Args:
+        file_path: Ruta absoluta al archivo .py a testear
+        save_to: Ruta donde guardar el archivo de tests (opcional).
+                 Si está vacío, usa test_<nombre>.py al lado del archivo original.
+    
+    Returns:
+        Dict con:
+        - test_code: código de los tests generados
+        - saved_to: dónde se guardó
+        - syntax_valid: bool
+        - execution: resultados de pytest (passed/failed/errors)
+        - summary: resumen legible
+    """
+    path = Path(file_path)
+    
+    # Paso 1: generar los tests (reutilizamos la tool existente)
+    generation_result = generate_tests_for_file(file_path)
+    
+    if "error" in generation_result:
+        return generation_result
+    
+    test_code = generation_result["test_code"]
+    
+    # Paso 2: validar sintaxis
+    syntax_check = _validate_syntax(test_code)
+    
+    if not syntax_check["valid"]:
+        return {
+            "test_code": test_code,
+            "saved_to": None,
+            "syntax_valid": False,
+            "syntax_error": syntax_check["error"],
+            "execution": None,
+            "summary": f"❌ Tests generados pero con error de sintaxis: {syntax_check['error']}",
+            "tokens_used": generation_result["tokens_used"],
+        }
+    
+    # Paso 3: determinar dónde guardar
+    if save_to:
+        save_path = Path(save_to)
+    else:
+        save_path = path.parent / f"test_{path.stem}.py"
+    
+    # Paso 4: guardar el archivo
+    try:
+        save_path.write_text(test_code, encoding="utf-8")
+    except Exception as e:
+        return {
+            "test_code": test_code,
+            "saved_to": None,
+            "syntax_valid": True,
+            "execution": None,
+            "summary": f"⚠️ Tests válidos pero no se pudieron guardar: {e}",
+            "tokens_used": generation_result["tokens_used"],
+        }
+    
+    # Paso 5: ejecutar pytest
+    execution = _run_pytest(save_path, source_dir=path.parent)
+    
+    # Paso 6: armar resumen
+    if execution.get("all_passed"):
+        summary = (
+            f"✅ {execution['passed']} tests generados y pasaron. "
+            f"Guardado en: {save_path}"
+        )
+    elif "error" in execution:
+        summary = f"⚠️ Tests generados pero no se pudieron ejecutar: {execution['error']}"
+    else:
+        summary = (
+            f"⚠️ {execution.get('passed', 0)} pasaron, "
+            f"{execution.get('failed', 0)} fallaron, "
+            f"{execution.get('errors', 0)} errores. "
+            f"Guardado en: {save_path}"
+        )
+    
+    return {
+        "test_code": test_code,
+        "saved_to": str(save_path),
+        "syntax_valid": True,
+        "execution": execution,
+        "summary": summary,
+        "tokens_used": generation_result["tokens_used"],
+    }
+
+def _validate_syntax(code: str) -> dict:
+    """Valida que el código sea Python sintácticamente correcto."""
+    try:
+        ast.parse(code)
+        return {"valid": True}
+    except SyntaxError as e:
+        return {
+            "valid": False,
+            "error": f"Línea {e.lineno}: {e.msg}",
+            "offset": e.offset,
+        }
+
+
+def _run_pytest(test_file_path: Path, source_dir: Path, timeout: int = 30) -> dict:
+    """
+    Ejecuta pytest sobre un archivo de tests en un subproceso aislado.
+    
+    Args:
+        test_file_path: Ruta al archivo de tests
+        source_dir: Directorio desde donde ejecutar pytest (para resolución de imports)
+        timeout: Segundos máximos antes de matar el proceso
+    
+    Returns:
+        Dict con: passed, failed, errors, output, stderr
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(test_file_path), "-v", "--tb=short", "--no-header"],
+            cwd=str(source_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        
+        output = result.stdout
+        stderr = result.stderr
+        
+        # Parsear resultados básicos del output
+        passed = output.count(" PASSED")
+        failed = output.count(" FAILED")
+        errors = output.count(" ERROR")
+        
+        return {
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "all_passed": result.returncode == 0,
+            "output": output[-2000:],
+            "stderr": stderr[-500:] if stderr else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "error": f"pytest excedió timeout de {timeout}s",
+            "all_passed": False,
+        }
+    except FileNotFoundError:
+        return {
+            "error": "pytest no está instalado en el entorno",
+            "all_passed": False,
+        }
+    except Exception as e:
+        return {
+            "error": f"Error ejecutando pytest: {e}",
+            "all_passed": False,
+        }
 
 if __name__ == "__main__":
     # Correr el server usando stdio (lo que Claude Desktop espera)
