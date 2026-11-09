@@ -6,15 +6,24 @@ Agente de IA para generar y analizar tests de Python.
 import ast
 import os
 import subprocess
-import tempfile
-from pathlib import Path
 import sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 
 load_dotenv()
+
+try:
+    __version__ = version("lanzakit-tester")
+except PackageNotFoundError:  # ejecutando desde el código fuente sin instalar
+    __version__ = "0.0.0+unknown"
+
+# Modelo de Claude usado para generar los tests (único punto de configuración)
+MODEL = "claude-sonnet-5"
+
 anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
@@ -31,7 +40,7 @@ def _clean_code_output(text: str) -> str:
 
 
 # Crear el servidor MCP
-mcp = MCPServer("lanzakit-tester")
+mcp = MCPServer("lanzakit-tester", version=__version__)
 
 
 @mcp.tool()
@@ -206,7 +215,7 @@ def generate_tests_for_file(file_path: str) -> dict:
     # Llamar a Claude
     try:
         message = anthropic_client.messages.create(
-            model="claude-sonnet-5",
+            model=MODEL,
             max_tokens=16384,
             thinking={"type": "disabled"},
             messages=[
@@ -404,6 +413,10 @@ def _run_pytest(test_file_path: Path, source_dir: Path, timeout: int = 30) -> di
             "all_passed": False,
         }
 
-if __name__ == "__main__":
-    # Correr el server usando stdio (lo que Claude Desktop espera)
+def run() -> None:
+    """Arranca el servidor MCP usando stdio (lo que Claude Desktop espera)."""
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    run()
