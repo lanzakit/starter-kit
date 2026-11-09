@@ -67,3 +67,9 @@ Comunica en español.
 - Tests en español (comentarios) pero nombres de funciones en inglés
 - Mantener imports ordenados: stdlib → third party → local
 - Modelo API siempre desde constante/config, nunca hardcoded en varias partes
+
+## Pendientes conocidos
+
+- Renombrar repo de `starter-kit` a `lanzakit-tester` antes del lanzamiento público
+- Reservar handle @lanzakit en X/Twitter
+- Crear archivos de badges reales cuando se publique en PyPI
