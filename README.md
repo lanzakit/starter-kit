@@ -2,6 +2,7 @@
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
+<!-- TODO: agregar badge PyPI después del primer release -->
 
 **Tests de pytest generados por IA, y verificados antes de que los veas.**
 
@@ -19,20 +20,13 @@ Lanzakit Tester es un MCP server que lee tu código Python, genera tests con Cla
 ## Requisitos
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
 - Una API key de Anthropic (`ANTHROPIC_API_KEY`)
 - Acceso al modelo `claude-sonnet-5`
 
 ## Instalación
 
-Primero clona el repo y prepara el entorno (ambas opciones lo necesitan):
-
 ```bash
-git clone https://github.com/lanzakit/starter-kit.git
-cd starter-kit
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+pip install lanzakit-tester
 echo "ANTHROPIC_API_KEY=tu_api_key" > .env
 ```
 
@@ -46,8 +40,7 @@ Agrega el server a tu `claude_desktop_config.json`:
 {
   "mcpServers": {
     "lanzakit-tester": {
-      "command": "/ruta/a/starter-kit/.venv/bin/python",
-      "args": ["/ruta/a/starter-kit/lanzakit_server.py"]
+      "command": "lanzakit-tester"
     }
   }
 }
@@ -55,17 +48,26 @@ Agrega el server a tu `claude_desktop_config.json`:
 
 Reinicia Claude Desktop y las 3 tools aparecerán disponibles.
 
-### Opción B: Vía CLI con uv
+### Opción B: Vía Python
 
 Sin cliente MCP, puedes invocar las tools directamente desde Python:
 
 ```bash
-uv run python -c "from lanzakit_server import generate_and_validate_tests; print(generate_and_validate_tests('/ruta/a/tu_archivo.py')['summary'])"
+python -c "from lanzakit_tester import generate_and_validate_tests; print(generate_and_validate_tests('/ruta/a/tu_archivo.py')['summary'])"
+```
+
+### Para contribuir
+
+```bash
+git clone https://github.com/lanzakit/starter-kit.git
+cd starter-kit
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
 ## Uso
 
-Tienes un archivo `hola_claude.py` (el "hola mundo" del proyecto, versión simplificada):
+Tienes un archivo `hola_claude.py` (ver `examples/hola_claude.py`, versión simplificada):
 
 ```python
 import os
@@ -88,15 +90,15 @@ def saludar():
 
 Desde Claude Desktop, pídele:
 
-> Genera y valida tests para `/ruta/a/hola_claude.py`
+> Genera y valida tests para `/ruta/a/tu_archivo.py`
 
 Claude llama a la tool `generate_and_validate_tests` y obtienes un resumen como este:
 
 ```text
-✅ 8 tests generados y pasaron. Guardado en: /ruta/a/test_hola_claude.py
+✅ 8 tests generados y pasaron. Guardado en: /ruta/a/test_tu_archivo.py
 ```
 
-El archivo `test_hola_claude.py` queda junto a tu código, listo para correr con `pytest`.
+El archivo `test_tu_archivo.py` queda junto a tu código, listo para correr con `pytest`.
 
 ### Tools disponibles
 
@@ -129,7 +131,8 @@ análisis AST  ──►  prompt a Claude  ──►  tests generados
 
 - [x] 3 tools funcionales
 - [x] Validación end-to-end
-- [ ] Distribución vía PyPI
+- [x] Empaquetado como paquete pip
+- [ ] Publicación en PyPI
 - [ ] Landing en lanzakit.dev
 - [ ] Soporte para más frameworks de testing
 

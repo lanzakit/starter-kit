@@ -4,6 +4,9 @@ Proyecto: MCP server en Python que genera y valida tests pytest con IA.
 
 ## Estado actual (noviembre 2026)
 
+Paquete Python instalable (`pip install lanzakit-tester`), versión 0.1.0, aún sin publicar en PyPI.
+Estructura `src/lanzakit_tester/` con build backend hatchling y CLI `lanzakit-tester`.
+
 Producto funcional con 3 tools:
 - `analyze_python_file`: analiza estructura del código con AST
 - `generate_tests_for_file`: genera tests con Claude API
@@ -26,22 +29,32 @@ Loop end-to-end funciona. 8 tests generados y 8 passed en pruebas reales.
 # Activar entorno
 source .venv/bin/activate
 
+# Instalar en modo editable (con deps de desarrollo)
+uv pip install -e ".[dev]"
+
+# Verificar CLI
+lanzakit-tester --version
+
 # Probar generación de tests
-python -c "from lanzakit_server import generate_and_validate_tests; print(generate_and_validate_tests('/ruta/archivo.py')['summary'])"
+python -c "from lanzakit_tester import generate_and_validate_tests; print(generate_and_validate_tests('/ruta/archivo.py')['summary'])"
 
 # Correr tests manualmente
-pytest test_hola_claude.py -v
+pytest examples -v
 ```
 
 ## Arquitectura
 
-- `lanzakit_server.py`: MCP server con las 3 tools
-- `hola_claude.py`: script de ejemplo "hola mundo" con Claude API
+- `pyproject.toml`: fuente de verdad de metadata y dependencias (hatchling)
+- `src/lanzakit_tester/server.py`: MCP server con las 3 tools, constante `MODEL`, `run()`
+- `src/lanzakit_tester/cli.py`: entrypoint argparse (`--version`; sin args arranca MCP por stdio)
+- `src/lanzakit_tester/__init__.py`: expone las 3 tools y `__version__`
+- `examples/`: `hola_claude.py` (hola mundo con Claude API) y su test; no son parte del paquete
 - `.env`: contiene ANTHROPIC_API_KEY (nunca commitear)
 
 ## Decisiones tomadas
 
-- Modelo: Claude Sonnet 5 (fijo por ahora)
+- Modelo: Claude Sonnet 5 (fijo por ahora), definido como constante `MODEL` en `src/lanzakit_tester/server.py`
+- Versión única en `pyproject.toml`; se lee con `importlib.metadata` y se pasa a `MCPServer(version=...)`
 - `max_tokens`: 16384 con thinking desactivado
 - Prompt engineering con delimitadores XML
 - `_clean_code_output()` remueve markdown fences
@@ -51,7 +64,7 @@ pytest test_hola_claude.py -v
 ## Próximos pasos
 
 - README público para GitHub
-- Empaquetar para PyPI como `lanzakit-tester`
+- Publicar en PyPI como `lanzakit-tester` (el empaquetado ya está listo)
 - Landing en lanzakit.dev con waitlist
 - Lanzamiento en X/LinkedIn + Product Hunt
 
