@@ -147,3 +147,5 @@ Distribuido bajo licencia MIT. Consulta el archivo [LICENSE](LICENSE).
 ---
 
 [@lanzakit](https://x.com/lanzakit) · Construido en Bolivia 🇧🇴 para devs hispanohablantes
+![PyPI](https://img.shields.io/pypi/v/lanzakit-tester)
+![Downloads](https://img.shields.io/pypi/dm/lanzakit-tester)
