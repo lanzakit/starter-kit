@@ -132,9 +132,15 @@ análisis AST  ──►  prompt a Claude  ──►  tests generados
 - [x] 3 tools funcionales
 - [x] Validación end-to-end
 - [x] Empaquetado como paquete pip
+- [x] Contexto de testing para modelos Pydantic y dataclasses
 - [ ] Publicación en PyPI
 - [ ] Landing en lanzakit.dev
 - [ ] Soporte para más frameworks de testing
+
+Para probar la detección de modelos Pydantic, usa una ruta absoluta a
+[`examples/item_model.py`](examples/item_model.py) con `analyze_python_file`.
+El resultado incluye `class_type: "pydantic"` y la generación de tests toma
+en cuenta restricciones declaradas como el rango de `quantity`.
 
 ## Contribuir
 

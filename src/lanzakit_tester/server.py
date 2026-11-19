@@ -43,6 +43,74 @@ def _clean_code_output(text: str) -> str:
 mcp = MCPServer("lanzakit-tester", version=__version__)
 
 
+_PYDANTIC_BASES = {
+    "pydantic.BaseModel",
+    "pydantic.main.BaseModel",
+    "pydantic.v1.BaseModel",
+    "pydantic.v1.main.BaseModel",
+}
+
+
+def _imported_name(node: ast.expr, aliases: dict[str, str]) -> str | None:
+    """Resuelve un nombre importado sin cargar el código que se analiza."""
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id)
+    if isinstance(node, ast.Attribute):
+        module = _imported_name(node.value, aliases)
+        return f"{module}.{node.attr}" if module else None
+    if isinstance(node, ast.Subscript):
+        return _imported_name(node.value, aliases)
+    return None
+
+
+def _class_type(node: ast.ClassDef, aliases: dict[str, str]) -> str:
+    """Identifica modelos Pydantic y dataclasses a partir del AST."""
+    for base in node.bases:
+        if _imported_name(base, aliases) in _PYDANTIC_BASES:
+            return "pydantic"
+
+    for decorator in node.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if _imported_name(target, aliases) != "dataclasses.dataclass":
+            continue
+        frozen = isinstance(decorator, ast.Call) and any(
+            kw.arg == "frozen"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is True
+            for kw in decorator.keywords
+        )
+        return "dataclass_frozen" if frozen else "dataclass"
+    return "regular"
+
+
+def _class_types(tree: ast.Module) -> dict[ast.ClassDef, str]:
+    """Clasifica las clases usando las importaciones resolubles del módulo."""
+    aliases: dict[str, str] = {}
+    classes: dict[ast.ClassDef, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                aliases[alias.asname or root] = alias.name if alias.asname else root
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                name = alias.asname or alias.name
+                if node.level == 0 and node.module:
+                    aliases[name] = f"{node.module}.{alias.name}"
+                else:
+                    aliases.pop(name, None)
+        else:
+            for child in ast.walk(node):
+                if isinstance(child, ast.ClassDef):
+                    classes[child] = _class_type(child, aliases)
+            if isinstance(node, ast.ClassDef):
+                if classes[node] == "pydantic":
+                    aliases[node.name] = "pydantic.BaseModel"
+                else:
+                    aliases.pop(node.name, None)
+    return classes
+
+
 @mcp.tool()
 def analyze_python_file(file_path: str) -> dict:
     """
@@ -51,7 +119,7 @@ def analyze_python_file(file_path: str) -> dict:
     Lee el archivo, lo parsea con AST (Abstract Syntax Tree) y extrae:
     - Nombre del archivo
     - Número de líneas totales
-    - Lista de clases definidas
+    - Lista de clases definidas con su tipo (clase regular, Pydantic o dataclass)
     - Lista de funciones definidas (incluye métodos de clases)
     - Imports utilizados
 
@@ -83,20 +151,25 @@ def analyze_python_file(file_path: str) -> dict:
         return {"error": f"El archivo tiene errores de sintaxis: {e}"}
 
     # Extraer información
+    class_types = _class_types(tree)
     classes = []
     functions = []
     imports = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            classes.append({
-                "name": node.name,
-                "line": node.lineno,
-                "methods": [
-                    n.name for n in node.body
-                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                ]
-            })
+            classes.append(
+                {
+                    "name": node.name,
+                    "line": node.lineno,
+                    "class_type": class_types[node],
+                    "methods": [
+                        n.name
+                        for n in node.body
+                        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    ],
+                }
+            )
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             functions.append({
                 "name": node.name,
@@ -128,6 +201,8 @@ Tu tarea: generar un archivo de tests pytest de alta calidad para el código pro
 {source_code}
 </codigo_a_testear>
 
+{class_context}
+
 <reglas_fundamentales>
 
 1. FIDELIDAD AL CÓDIGO
@@ -141,7 +216,8 @@ Tu tarea: generar un archivo de tests pytest de alta calidad para el código pro
 - No incluyas casos genéricos sin justificación
 
 3. IMPORTS Y DEPENDENCIAS
-- Solo usa: pytest, unittest.mock, biblioteca estándar
+- Usa pytest, unittest.mock y la biblioteca estándar. Para verificar una excepción,
+  puedes importar su clase de una dependencia que el código bajo prueba ya utiliza.
 - NO inventes: fixtures custom, pytest-plugins externos, módulos que no existen
 - Para importar el código bajo prueba usa el nombre del archivo sin extensión
 - Si no puedes determinar la ruta de import con confianza, NO inventes
@@ -177,6 +253,39 @@ Devuelve EXCLUSIVAMENTE código Python válido, listo para guardar como test_<no
 Primera línea: un import o un comentario Python.
 No incluyas nada antes ni después del código.
 </formato_salida>"""
+
+
+_DATACLASS_GUIDANCE = "Prueba la creación, igualdad, replace() y asdict() cuando aplican a su configuración."
+_CLASS_GUIDANCE = {
+    "pydantic": (
+        "Prueba tipos, rangos y restricciones de Field() que declare el modelo. "
+        "Considera sus reglas de coerción y usa pytest.raises con ValidationError para datos inválidos."
+    ),
+    "dataclass": _DATACLASS_GUIDANCE,
+    "dataclass_frozen": (
+        _DATACLASS_GUIDANCE
+        + " Comprueba que reasignar un campo lanza FrozenInstanceError."
+    ),
+}
+
+
+def _class_context(source_code: str) -> str:
+    """Incluye únicamente la orientación que corresponde a las clases del archivo."""
+    try:
+        classes = _class_types(ast.parse(source_code))
+    except SyntaxError:
+        return ""
+
+    lines = []
+    for kind, guidance in _CLASS_GUIDANCE.items():
+        names = [
+            node.name for node, class_type in classes.items() if class_type == kind
+        ]
+        if names:
+            lines.append(f"- {', '.join(names)}: {guidance}")
+    return (
+        "\n".join(["<contexto_clases>", *lines, "</contexto_clases>"]) if lines else ""
+    )
 
 
 @mcp.tool()
@@ -223,10 +332,11 @@ def generate_tests_for_file(file_path: str) -> dict:
                     "role": "user",
                     "content": GENERATE_TESTS_PROMPT.format(
                         source_code=source_code,
-                        file_path=str(path)
-                    )
+                        file_path=str(path),
+                        class_context=_class_context(source_code),
+                    ),
                 }
-            ]
+            ],
         )
     except Exception as e:
         return {"error": f"Error llamando a Claude API: {e}"}
