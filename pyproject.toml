@@ -44,3 +44,6 @@ lanzakit-tester = "lanzakit_tester.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lanzakit_tester"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["CLAUDE.md", "CLAUDE.local.md", ".env*"]
