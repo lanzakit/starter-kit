@@ -121,3 +121,37 @@ def test_works_without_pytest_cov(server, tmp_path):
     assert result["execution"]["all_passed"] is True
     assert result["coverage"] is None
     assert "Cobertura" not in result["summary"]
+
+
+def test_generated_tests_cannot_read_urls_with_credentials(
+    server, tmp_path, monkeypatch
+):
+    # Variable con nombre inocente pero con clave dentro de la URL
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
+    # URL sin credenciales: debe seguir pasando
+    monkeypatch.setenv("PUBLIC_URL", "https://lanzakit.dev/docs")
+    source = tmp_path / "calc.py"
+    source.write_text(SOURCE, encoding="utf-8")
+    spy_tests = """import os
+
+
+def test_env_is_clean():
+    assert "DATABASE_URL" not in os.environ
+    assert os.environ.get("PUBLIC_URL") == "https://lanzakit.dev/docs"
+    assert "PATH" in os.environ
+"""
+
+    with patch.object(
+        server, "generate_tests_for_file", return_value=_fake_generation(spy_tests)
+    ):
+        result = server.generate_and_validate_tests(str(source))
+
+    assert result["execution"]["all_passed"] is True, result["execution"]["output"]
+
+
+def test_safe_env_keeps_normal_variables(server, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
+    env = server._safe_env()
+
+    assert "DATABASE_URL" not in env
+    assert "PATH" in env
