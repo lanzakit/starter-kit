@@ -158,3 +158,6 @@ dist/
 build/
 *.egg-info/
 *.egg
+# Datos de cobertura (pytest-cov)
+.coverage
+.coverage.*
