@@ -155,3 +155,16 @@ def test_safe_env_keeps_normal_variables(server, monkeypatch):
 
     assert "DATABASE_URL" not in env
     assert "PATH" in env
+
+
+def test_does_not_leave_coverage_file_in_source_dir(server, tmp_path):
+    source = tmp_path / "calc.py"
+    source.write_text(SOURCE, encoding="utf-8")
+
+    with patch.object(
+        server, "generate_tests_for_file", return_value=_fake_generation(PARTIAL_TESTS)
+    ):
+        result = server.generate_and_validate_tests(str(source))
+
+    assert result["coverage"] is not None  # sí se midió la cobertura
+    assert list(tmp_path.glob(".coverage*")) == []  # pero sin ensuciar la carpeta

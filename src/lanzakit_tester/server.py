@@ -482,6 +482,9 @@ def _run_pytest(
     with tempfile.TemporaryDirectory() as tmp_dir:
         report_path = Path(tmp_dir) / "coverage.json"
         measure = source_file is not None and _coverage_available()
+        env = _safe_env()
+        # Los datos de cobertura van al directorio temporal, no a la carpeta del usuario
+        env["COVERAGE_FILE"] = str(Path(tmp_dir) / ".coverage")
         if measure:
             command += [
                 f"--cov={source_file.stem}",
@@ -497,7 +500,7 @@ def _run_pytest(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env=_safe_env(),
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return {
