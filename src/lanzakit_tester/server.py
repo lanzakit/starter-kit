@@ -7,6 +7,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -403,10 +404,24 @@ def _validate_syntax(code: str) -> dict:
 # Palabras que delatan una variable de entorno sensible
 _SENSITIVE_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
+# Credenciales dentro de una URL: esquema://usuario:clave@host
+# Ej.: postgres://user:pass@localhost/db
+_URL_CREDENTIALS = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
+
+
+def _is_sensitive_env(name: str, value: str) -> bool:
+    """True si la variable parece secreta por su nombre o por su valor."""
+    if any(marker in name.upper() for marker in _SENSITIVE_ENV_MARKERS):
+        return True
+    return _URL_CREDENTIALS.search(value) is not None
+
 
 def _safe_env() -> dict:
     """
     Copia del entorno SIN secretos para el subproceso de pytest.
+
+    Filtra por nombre (KEY, TOKEN, ...) y también por valor: variables como
+    DATABASE_URL=postgres://user:pass@host/db llevan la clave dentro de la URL.
 
     Los tests generados por IA corren en tu máquina: si heredaran el entorno,
     podrían leer ANTHROPIC_API_KEY u otras claves. Se las quitamos.
@@ -414,7 +429,7 @@ def _safe_env() -> dict:
     return {
         name: value
         for name, value in os.environ.items()
-        if not any(marker in name.upper() for marker in _SENSITIVE_ENV_MARKERS)
+        if not _is_sensitive_env(name, value)
     }
 
 
