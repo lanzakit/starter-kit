@@ -4,9 +4,12 @@ Lanzakit Tester - MCP Server
 Agente de IA para generar y analizar tests de Python.
 """
 import ast
+import importlib.util
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -255,40 +258,54 @@ def generate_tests_for_file(file_path: str) -> dict:
 @mcp.tool()
 def generate_and_validate_tests(
     file_path: str,
-    save_to: str = ""
+    save_to: str = "",
+    overwrite: bool = False,
 ) -> dict:
     """
-    Flujo completo: genera tests, valida sintaxis, ejecuta y reporta.
-    
+    Flujo completo: genera tests, valida sintaxis, ejecuta, mide cobertura y reporta.
+
     Esta tool cierra el loop de calidad: no solo genera tests sino que
-    verifica que compilen y que pasen antes de entregárselos al usuario.
-    
+    verifica que compilen, que pasen y qué tanto del código fuente cubren.
+
+    IMPORTANTE: los tests generados se EJECUTAN en tu máquina. Úsala solo con
+    código de confianza.
+
     Args:
         file_path: Ruta absoluta al archivo .py a testear
         save_to: Ruta donde guardar el archivo de tests (opcional).
-                 Si está vacío, usa test_<nombre>.py al lado del archivo original.
-    
+                 Debe ser un archivo test_*.py. Si está vacío, usa
+                 test_<nombre>.py al lado del archivo original.
+        overwrite: Si es False (por defecto), no sobrescribe un archivo
+                   de tests que ya exista.
+
     Returns:
         Dict con:
         - test_code: código de los tests generados
         - saved_to: dónde se guardó
         - syntax_valid: bool
         - execution: resultados de pytest (passed/failed/errors)
+        - coverage: cobertura del archivo (percent, missing_lines) o None
         - summary: resumen legible
     """
     path = Path(file_path)
-    
-    # Paso 1: generar los tests (reutilizamos la tool existente)
+
+    # Paso 1: decidir y validar dónde guardar ANTES de gastar tokens en Claude
+    save_path = Path(save_to) if save_to else path.parent / f"test_{path.stem}.py"
+    save_check = _validate_save_path(save_path, overwrite)
+    if "error" in save_check:
+        return save_check
+
+    # Paso 2: generar los tests (reutilizamos la tool existente)
     generation_result = generate_tests_for_file(file_path)
-    
+
     if "error" in generation_result:
         return generation_result
-    
+
     test_code = generation_result["test_code"]
-    
-    # Paso 2: validar sintaxis
+
+    # Paso 3: validar sintaxis
     syntax_check = _validate_syntax(test_code)
-    
+
     if not syntax_check["valid"]:
         return {
             "test_code": test_code,
@@ -296,16 +313,11 @@ def generate_and_validate_tests(
             "syntax_valid": False,
             "syntax_error": syntax_check["error"],
             "execution": None,
+            "coverage": None,
             "summary": f"❌ Tests generados pero con error de sintaxis: {syntax_check['error']}",
             "tokens_used": generation_result["tokens_used"],
         }
-    
-    # Paso 3: determinar dónde guardar
-    if save_to:
-        save_path = Path(save_to)
-    else:
-        save_path = path.parent / f"test_{path.stem}.py"
-    
+
     # Paso 4: guardar el archivo
     try:
         save_path.write_text(test_code, encoding="utf-8")
@@ -315,37 +327,65 @@ def generate_and_validate_tests(
             "saved_to": None,
             "syntax_valid": True,
             "execution": None,
+            "coverage": None,
             "summary": f"⚠️ Tests válidos pero no se pudieron guardar: {e}",
             "tokens_used": generation_result["tokens_used"],
         }
-    
-    # Paso 5: ejecutar pytest
-    execution = _run_pytest(save_path, source_dir=path.parent)
-    
+
+    # Paso 5: ejecutar pytest midiendo la cobertura del archivo original
+    execution = _run_pytest(save_path, source_dir=path.parent, source_file=path)
+    coverage = execution.pop("coverage", None)
+
     # Paso 6: armar resumen
     if execution.get("all_passed"):
-        summary = (
-            f"✅ {execution['passed']} tests generados y pasaron. "
-            f"Guardado en: {save_path}"
-        )
+        summary = f"✅ {execution['passed']} tests generados y pasaron."
     elif "error" in execution:
         summary = f"⚠️ Tests generados pero no se pudieron ejecutar: {execution['error']}"
     else:
         summary = (
             f"⚠️ {execution.get('passed', 0)} pasaron, "
             f"{execution.get('failed', 0)} fallaron, "
-            f"{execution.get('errors', 0)} errores. "
-            f"Guardado en: {save_path}"
+            f"{execution.get('errors', 0)} errores."
         )
-    
+    if coverage:
+        summary += f" 📊 Cobertura: {coverage['percent']}%"
+        if coverage["missing_lines"]:
+            lines = ", ".join(str(n) for n in coverage["missing_lines"][:15])
+            summary += f" (líneas sin probar: {lines})"
+        summary += "."
+    if "error" not in execution:
+        summary += f" Guardado en: {save_path}"
+
     return {
         "test_code": test_code,
         "saved_to": str(save_path),
         "syntax_valid": True,
         "execution": execution,
+        "coverage": coverage,
         "summary": summary,
         "tokens_used": generation_result["tokens_used"],
     }
+
+
+def _validate_save_path(save_path: Path, overwrite: bool) -> dict:
+    """
+    Evita que la tool escriba donde no debe.
+
+    - Solo acepta archivos test_*.py (así nunca pisa código real ni
+      archivos de configuración como .bashrc o .env).
+    - No sobrescribe tests existentes salvo que se pida explícitamente.
+    """
+    if save_path.suffix != ".py" or not save_path.name.startswith("test_"):
+        return {"error": f"save_to debe ser un archivo test_*.py, no {save_path.name}"}
+    if save_path.exists() and not overwrite:
+        return {
+            "error": (
+                f"{save_path} ya existe. Usa overwrite=True para reemplazarlo "
+                "o indica otra ruta en save_to."
+            )
+        }
+    return {}
+
 
 def _validate_syntax(code: str) -> dict:
     """Valida que el código sea Python sintácticamente correcto."""
@@ -360,58 +400,129 @@ def _validate_syntax(code: str) -> dict:
         }
 
 
-def _run_pytest(test_file_path: Path, source_dir: Path, timeout: int = 30) -> dict:
+# Palabras que delatan una variable de entorno sensible
+_SENSITIVE_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+
+
+def _safe_env() -> dict:
+    """
+    Copia del entorno SIN secretos para el subproceso de pytest.
+
+    Los tests generados por IA corren en tu máquina: si heredaran el entorno,
+    podrían leer ANTHROPIC_API_KEY u otras claves. Se las quitamos.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not any(marker in name.upper() for marker in _SENSITIVE_ENV_MARKERS)
+    }
+
+
+def _coverage_available() -> bool:
+    """True si pytest-cov está instalado en el entorno actual."""
+    return importlib.util.find_spec("pytest_cov") is not None
+
+
+def _read_coverage(report_path: Path, source_file: Path) -> dict | None:
+    """Lee el reporte JSON de coverage y extrae los datos del archivo testeado."""
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    for file_name, file_data in data.get("files", {}).items():
+        if Path(file_name).name == source_file.name:
+            summary = file_data.get("summary", {})
+            return {
+                "percent": round(summary.get("percent_covered", 0.0), 1),
+                "missing_lines": file_data.get("missing_lines", []),
+            }
+    return None
+
+
+def _run_pytest(
+    test_file_path: Path,
+    source_dir: Path,
+    source_file: Path | None = None,
+    timeout: int = 30,
+) -> dict:
     """
     Ejecuta pytest sobre un archivo de tests en un subproceso aislado.
-    
+
     Args:
         test_file_path: Ruta al archivo de tests
         source_dir: Directorio desde donde ejecutar pytest (para resolución de imports)
+        source_file: Archivo original; si se indica y pytest-cov está
+                     instalado, se mide su cobertura
         timeout: Segundos máximos antes de matar el proceso
-    
+
     Returns:
-        Dict con: passed, failed, errors, output, stderr
+        Dict con: passed, failed, errors, output, stderr y coverage (o None)
     """
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(test_file_path), "-v", "--tb=short", "--no-header"],
-            cwd=str(source_dir),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        
-        output = result.stdout
-        stderr = result.stderr
-        
-        # Parsear resultados básicos del output
-        passed = output.count(" PASSED")
-        failed = output.count(" FAILED")
-        errors = output.count(" ERROR")
-        
-        return {
-            "passed": passed,
-            "failed": failed,
-            "errors": errors,
-            "all_passed": result.returncode == 0,
-            "output": output[-2000:],
-            "stderr": stderr[-500:] if stderr else "",
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "error": f"pytest excedió timeout de {timeout}s",
-            "all_passed": False,
-        }
-    except FileNotFoundError:
-        return {
-            "error": "pytest no está instalado en el entorno",
-            "all_passed": False,
-        }
-    except Exception as e:
-        return {
-            "error": f"Error ejecutando pytest: {e}",
-            "all_passed": False,
-        }
+    command = [
+        sys.executable, "-m", "pytest", str(test_file_path),
+        "-v", "--tb=short", "--no-header",
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        report_path = Path(tmp_dir) / "coverage.json"
+        measure = source_file is not None and _coverage_available()
+        if measure:
+            command += [
+                f"--cov={source_file.stem}",
+                "--cov-branch",
+                f"--cov-report=json:{report_path}",
+                "--cov-report=",  # sin tabla en consola: usamos el JSON
+            ]
+
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(source_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_safe_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "error": f"pytest excedió timeout de {timeout}s",
+                "all_passed": False,
+                "coverage": None,
+            }
+        except FileNotFoundError:
+            return {
+                "error": "pytest no está instalado en el entorno",
+                "all_passed": False,
+                "coverage": None,
+            }
+        except Exception as e:
+            return {
+                "error": f"Error ejecutando pytest: {e}",
+                "all_passed": False,
+                "coverage": None,
+            }
+
+        coverage = _read_coverage(report_path, source_file) if measure else None
+
+    output = result.stdout
+    stderr = result.stderr
+
+    # Parsear resultados básicos del output
+    passed = output.count(" PASSED")
+    failed = output.count(" FAILED")
+    errors = output.count(" ERROR")
+
+    return {
+        "passed": passed,
+        "failed": failed,
+        "errors": errors,
+        "all_passed": result.returncode == 0,
+        "output": output[-2000:],
+        "stderr": stderr[-500:] if stderr else "",
+        "coverage": coverage,
+    }
+
 
 def run() -> None:
     """Arranca el servidor MCP usando stdio (lo que Claude Desktop espera)."""

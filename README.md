@@ -12,6 +12,7 @@ Lanzakit Tester es un MCP server que lee tu código Python, genera tests con Cla
 
 - 🧪 **Generación de tests con Claude**: analiza tu código y produce tests pytest listos para usar.
 - ✅ **Validación automática**: verifica la sintaxis y ejecuta pytest antes de entregarte el resultado.
+- 📊 **Cobertura incluida**: mide qué porcentaje de tu código cubren los tests y qué líneas quedaron sin probar (pytest-cov).
 - 🔌 **MCP nativo**: funciona con Claude Desktop y cualquier cliente compatible con MCP.
 - 🌳 **Análisis con AST**: entiende funciones, clases y firmas antes de armar el prompt.
 - 🇪🇸 **Español-first**: comentarios de los tests y documentación en español.
@@ -95,10 +96,20 @@ Desde Claude Desktop, pídele:
 Claude llama a la tool `generate_and_validate_tests` y obtienes un resumen como este:
 
 ```text
-✅ 8 tests generados y pasaron. Guardado en: /ruta/a/test_tu_archivo.py
+✅ 8 tests generados y pasaron. 📊 Cobertura: 87.5% (líneas sin probar: 14, 22). Guardado en: /ruta/a/test_tu_archivo.py
 ```
 
 El archivo `test_tu_archivo.py` queda junto a tu código, listo para correr con `pytest`.
+Si ya existe un `test_tu_archivo.py`, Lanzakit no lo sobrescribe: pídele que use otra ruta o que lo reemplace (`overwrite=True`).
+
+### Seguridad
+
+`generate_and_validate_tests` **ejecuta en tu máquina** los tests que genera la IA. Úsalo solo con código de confianza.
+Para reducir riesgos, Lanzakit:
+
+- Corre pytest sin variables de entorno sensibles (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`), así los tests no pueden leer tu `ANTHROPIC_API_KEY`.
+- Solo guarda archivos `test_*.py` y nunca sobrescribe tests existentes sin permiso.
+- Corta la ejecución de pytest a los 30 segundos.
 
 ### Tools disponibles
 
@@ -106,7 +117,7 @@ El archivo `test_tu_archivo.py` queda junto a tu código, listo para correr con 
 |------|----------|
 | `analyze_python_file` | Analiza la estructura del código con AST. |
 | `generate_tests_for_file` | Genera tests pytest con Claude. |
-| `generate_and_validate_tests` | Genera, valida sintaxis, guarda y ejecuta pytest. |
+| `generate_and_validate_tests` | Genera, valida sintaxis, guarda, ejecuta pytest y mide cobertura. |
 
 ## Cómo funciona
 
@@ -124,16 +135,17 @@ análisis AST  ──►  prompt a Claude  ──►  tests generados
 2. Arma un prompt con el código y su contexto, y se lo envía a Claude (`claude-sonnet-5`).
 3. Limpia la respuesta (por ejemplo, quita markdown fences).
 4. Valida que los tests tengan sintaxis Python correcta.
-5. Guarda el archivo y ejecuta pytest.
-6. Devuelve un resumen: cuántos pasaron, fallaron o dieron error.
+5. Guarda el archivo y ejecuta pytest con pytest-cov.
+6. Devuelve un resumen: cuántos pasaron, fallaron o dieron error, el % de cobertura y las líneas sin probar.
 
 ## Roadmap
 
 - [x] 3 tools funcionales
 - [x] Validación end-to-end
 - [x] Empaquetado como paquete pip
-- [ ] Publicación en PyPI
-- [ ] Landing en lanzakit.dev
+- [x] Publicación en PyPI
+- [x] Landing en lanzakit.dev
+- [x] Cobertura con pytest-cov (v0.2)
 - [ ] Soporte para más frameworks de testing
 
 ## Contribuir
